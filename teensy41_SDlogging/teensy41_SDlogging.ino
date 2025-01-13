@@ -26,7 +26,7 @@ void setup() {
   Serial.println("SD card initialized.");
 
   // Open log file
-  logFile = SD.sdfs.open("timelog.bin", O_WRITE | O_CREAT | O_TRUNC);
+  logFile = SD.sdfs.open("timelogbatcheck.bin", O_WRITE | O_CREAT | O_TRUNC);
   if (!logFile) {
     Serial.println("Failed to open log file!");
     while (1);

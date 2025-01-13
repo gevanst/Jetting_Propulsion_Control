@@ -1,5 +1,5 @@
 % File path
-filename = 'fastlog.bin';
+filename = 'timelogbatcheck.bin';
 
 % Open the binary file for reading
 fileID = fopen(filename, 'rb');
@@ -15,7 +15,7 @@ figure;
 plot(timeData, '-o');
 xlabel('Sample Index');
 ylabel('Timestamp (µs)');
-title('Logged Timestamps at 5 kHz');
+title('Logged Timestamps at 1 kHz');
 grid on;
 
 % Calculate intervals between timestamps

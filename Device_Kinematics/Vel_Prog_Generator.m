@@ -29,7 +29,7 @@ Hd3 = Hdotc*(time(indf)-time(ind2+1:indf))/t1;
 HM = [time',[-Hd1,-Hd2,-Hd3,Hd1(2:end),Hdotc,Hd2,Hd3]'];
 
 V_max = 0.05; % m/s
-SF = 3;
+SF = 0.01;
 Hd =  -Hdotc* tanh(SF * sin(2 * pi * freq * time)) / tanh(SF);
 HM2 = [time', Hd'];
 
@@ -39,7 +39,7 @@ plot(HM(:,1),HM(:,2),HM2(:,1),HM2(:,2))
 
 theta0 = 0.01; %pi;
 % [tout,ThetaSim] = ode45(@CrankFunc,[0,time],theta0,[],params,HM);
-[tout,ThetaSim] = ode23(@CrankFunc,time,theta0,[],params,HM2); % trying 89 for more stiff model solves 
+[tout,ThetaSim] = ode89(@CrankFunc,time,theta0,[],params,HM2); % trying 89 for more stiff model solves 
 tint2 = (tout(1:end-1)+tout(2:end))/2;
 thetadotsim = diff(ThetaSim)./diff(tout);
 Thetadotsim = interp1(tint2,thetadotsim,tout,'linear','extrap');%anglular velocity of crank
@@ -104,9 +104,9 @@ pprogND = pprog*1000/(2*pi);        %Position at each non-dim time, (units are 1
 vprogND = vprog*1000/(2*pi*freq);   
 aprogND = aprog*1000/(2*pi*freq^2);
 % FName = 'F:\VelProg.txt';
-FName = 'VelProg_SF_03_2hz.txt';
-C = [timeND;pprogND;vprogND;aprogND];
-C = int16(C);
-writematrix(C,FName)
+% FName = 'VelProg_SF_03_2hz.txt';
+% C = [timeND;pprogND;vprogND;aprogND];
+% C = int16(C);
+% writematrix(C,FName)
 
 
