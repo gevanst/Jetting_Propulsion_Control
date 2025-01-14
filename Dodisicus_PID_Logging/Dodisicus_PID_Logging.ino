@@ -26,8 +26,8 @@ const int MotorCurrent = A9; // ADC0 for current sense on motor driver (pin 8 on
 
 const int chipSelect1 = 0; // 0 pin for CS1; this is for the encoder; MISO-1, MOSI-26, SCK-27, gnd, 5v
 
-const int mPWM = 2; //pwm signal for motor driver IC (pwm timer: FlexPWM4.2, pin 3 also on same timer)
-const int mDIR = 3; // direction signal for motor driver IC (high or low to switch direcitons)
+const int mPWM = 3; //pwm signal for motor driver IC (pwm timer: FlexPWM4.2, pin 3 also on same timer)
+const int mDIR = 2; // direction signal for motor driver IC (high or low to switch direcitons)
 
 const int MagS = 4; //input pin for magnetic sensor to turn on jetting
 
@@ -55,7 +55,7 @@ int historyIndex = 0;
 Metro logTimer(1);
 
 void setup() {
-  pinMode(chipSelect1, OUTPUT); // set up chipselct pin mode
+  pinMode(chipSelect1, OUTPUT); // set up chipselct pin mode for encoder comms
   digitalWrite(chipSelect1, HIGH); // set encoder to inactive state
 
   pinMode(ledPin, OUTPUT);
@@ -84,7 +84,7 @@ void setup() {
   //***********
 
   //***********load velocty program off of SD card to a matrix that will be interpolated with in the main PID loop
-
+  loadVelProgram();
   //***********
 
 }
@@ -139,7 +139,6 @@ void createNewLogFile() {
     String fileName = "Log_05Hz_256pts_" + String(logFileCount) + ".bin";
     logFile = SD.sdfs.open(fileName.c_str(), O_WRITE | O_CREAT | O_TRUNC);// open for write, create file if doens't exist, overwrite if file exists
     if (logFile) {
-        logFile.println("LOG START");
         logFileCount++; // Increment the file count for the next log file
     }
 }
@@ -152,6 +151,12 @@ void loadVelProgram() {
       String line = file.readStringUntil('\n'); //read until the new line
       int separator1 = line.indexOf(',');//find first comma in string
       int separator2 = line.indexOf(',', separator1 + 1);//find second comma in string by starting after the first comma
+      if (separator1 > 0 && separator2 > 0) {
+        velocityProgram[velProgLength][0] = line.substring(0, separator1).toInt(); // Position
+        velocityProgram[velProgLength][1] = line.substring(separator1 + 1, separator2).toInt(); // Velocity
+        velocityProgram[velProgLength][2] = line.substring(separator2 + 1).toInt(); // Acceleration
+        velProgLength++;
+    }
     }
   }
 }
