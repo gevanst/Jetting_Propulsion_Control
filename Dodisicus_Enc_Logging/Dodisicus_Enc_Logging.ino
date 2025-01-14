@@ -11,6 +11,8 @@ const int encoderCS = 0; // Chip select for encoder
 const int ledPin = LED_BUILTIN;
 const int magSwitchPin = 4;
 
+const int RESOLUTION = 12;
+
 // State Variables
 bool lastSwitchState = HIGH;
 bool currentSwitchState = LOW;
