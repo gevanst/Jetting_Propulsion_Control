@@ -173,16 +173,24 @@ void logData() {
                 int index1 = (velocityIndex + i) % VELOCITY_SAMPLES;
                 int index2 = (index1 + 1) % VELOCITY_SAMPLES;
 
-                // Calculate velocity between consecutive samples
-                float deltaPos = positionBuffer[index2] - positionBuffer[index1];
+                // Calculate position difference with wraparound handling
+                int32_t deltaPos = positionBuffer[index2] - positionBuffer[index1];
+                if (deltaPos > 2048) { // Forward wraparound
+                    deltaPos -= 4096;
+                } else if (deltaPos < -2048) { // Reverse wraparound
+                    deltaPos += 4096;
+                }
+
                 float deltaTime = (timeBuffer[index2] - timeBuffer[index1]) / 1000.0; // Convert ms to s
                 if (deltaTime > 0) {
                     velocity += deltaPos / deltaTime;
                 }
             }
+
             // Average the velocity
             velocity /= (samplesToUse - 1);
         }
+
         // Log data
         logFile.print(currentTime);
         logFile.print(", ");
@@ -197,4 +205,5 @@ void logData() {
         }
     }
 }
+
 
