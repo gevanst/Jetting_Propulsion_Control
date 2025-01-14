@@ -38,8 +38,8 @@ const int Ki = 20; // Integral Control Gain
 bool LastSwitchState = HIGH; //mag switch/sensor is normally open (hamlin 59140 1-U-02-A)
 bool SwitchState = LOW;
 int State = 0; //0-idle, 1-running
-const unsigned long debounceInt = 500; //debounce interval (ignores switches in mag state shorter than 0.5s)
-unsigned long lastSwitchTime = 0;
+const unsigned long debounce = 500; //debounce interval (ignores switches in mag state shorter than 0.5s)
+unsigned long LastSwitchTime = 0;
 
 float int velProgram[256][3]; //change length based on type of program loaded
 int velProgLength = 0;
@@ -87,41 +87,33 @@ void setup() {
   loadVelProgram();
   //***********
 
+  initializeLogFileCount();
+
 }
 
 void loop() {
   SwitchState = digitalRead(MagS);
-  if (LastSwitchState != SwitchState){
-    lastSwitchTime = millis();
-  }
-
-  if (millis() - lastSwitchTime >= debounceInt){//idle/run state switching logic with led indication
-    if(SwitchState == HIGH){
-      if(State == 0){
+  if (SwitchState == HIGH && LastSwitchState == LOW) {
+    if(millis() - LastSwitchTime >= debounce) {
+      if(State == 0) {
         State = 1;
         digitalWrite(ledPin, HIGH);
-        createNewLogFile();// create new log file for each time the jetting is turned on
+        createNewLogFile();
       }
-      else{
+      else {
         State = 0;
         digitalWrite(ledPin, LOW);
-        if (logFile) {// if there is a log file close it
+        if (logFile) {
           logFile.close();
         }
       }
+      lastSwitchTime = millis(); //update switch time
     }
   }
 
-  if (State == 0){
-    setMotor(1,0,mPWM,mDIR); //set to not spin motor
+  if (logTimer.check() && State == 1) {
+    logData();
   }
-
-  if (State == 1){
-    //********************* Main PID loop based on loaded velocity program, also need to log while it is in the run state at 1KHz, this should be independent of the main PID loop (where should this go?)
-
-    //*********************
-  }
-
 
 }
 
@@ -153,12 +145,32 @@ bool verifyChecksumSPI(uint16_t message) {
     return checksum == (message >> 14);
 }
 
+void initializeLogFileCount() {
+    while (true) {
+        String fileName = "Log_05Hz_256pts_" + String(logFileCount) + ".txt";
+        if (!SD.sdfs.exists(fileName.c_str())) {
+            break;
+        }
+        logFileCount++;
+    }
+}
+
 void createNewLogFile() {
-    static int logFileCount = 1; // Static variable to persist across function calls
-    String fileName = "Log_05Hz_256pts_" + String(logFileCount) + ".bin";
+    String fileName = "Log_05Hz_256pts_" + String(logFileCount) + ".txt";
     logFile = SD.sdfs.open(fileName.c_str(), O_WRITE | O_CREAT | O_TRUNC);// open for write, create file if doens't exist, overwrite if file exists
     if (logFile) {
         logFileCount++; // Increment the file count for the next log file
+        logFile.println("Time (ms), Position")
+    }
+}
+
+void logData() {
+    if (systemState == 1 && logFile) {
+        unsigned long currentTime = millis();
+        uint16_t position = readEncoder();
+        logFile.print(currentTime);//csv format
+        logFile.print(", ");
+        logFile.println(position);
     }
 }
 
@@ -183,7 +195,6 @@ void loadVelProgram() {
 void driveToTDC() {
     uint16_t position = ReadEnc();
     unsigned long lastUpdateTime = millis();
-
     while (millis() - lastUpdateTime < 5000) { // Timeout after 5 seconds
         position = ReadEnc();
         if (position == 0) {

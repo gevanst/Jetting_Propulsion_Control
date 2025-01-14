@@ -144,16 +144,15 @@ void createNewLogFile() {
     logFile = SD.sdfs.open(fileName.c_str(), O_WRITE | O_CREAT | O_TRUNC);
     if (logFile) {
         logFileCount++;
-        // Write a header for readability
+        // Write a header
         logFile.println("Time (ms), Position");
     }
 }
 
 void logData() {
-    if (systemState == 1 && logFile) {
+    if (logFile) {
         unsigned long currentTime = millis();
         uint16_t position = readEncoder();
-
         // Write time and position in CSV format
         logFile.print(currentTime);
         logFile.print(", ");
