@@ -36,6 +36,13 @@ Metro logTimer(2); // Logging interval 1 - 1kHz, 2 - 500Hz, 10 - 100Hz, etc.
 // SPI Settings for Encoder
 const SPISettings encoderSPISettings(1000000, MSBFIRST, SPI_MODE0); // 1 MHz clock, SPI mode 0
 
+const int VELOCITY_SAMPLES = 5;// for velocity calculation
+uint16_t positionBuffer[VELOCITY_SAMPLES] = {0};
+unsigned long timeBuffer[VELOCITY_SAMPLES] = {0};
+int velocityIndex = 0;
+bool bufferFilled = false;
+
+
 void setup() {
     pinMode(encoderCS, OUTPUT);
     digitalWrite(encoderCS, HIGH); // Set encoder CS inactive
@@ -131,7 +138,7 @@ bool verifyChecksumSPI(uint16_t message) {
 
 void initializeLogFileCount() {
     while (true) {
-        String fileName = "Log_encoder_" + String(logFileCount) + ".txt";
+        String fileName = "Log_encoder_vel" + String(logFileCount) + ".txt";
         if (!SD.sdfs.exists(fileName.c_str())) {
             break;
         }
@@ -140,22 +147,54 @@ void initializeLogFileCount() {
 }
 
 void createNewLogFile() {
-    String fileName = "Log_encoder_" + String(logFileCount) + ".txt";
+    String fileName = "Log_encoder_vel" + String(logFileCount) + ".txt";
     logFile = SD.sdfs.open(fileName.c_str(), O_WRITE | O_CREAT | O_TRUNC);
     if (logFile) {
         logFileCount++;
         // Write a header
-        logFile.println("Time (ms), Position");
+        logFile.println("Time (ms), Position (count), Velocity (count/s)");
     }
 }
 
 void logData() {
     if (logFile) {
         unsigned long currentTime = millis();
-        uint16_t position = readEncoder();
-        // Write time and position in CSV format
+        uint16_t currentPosition = readEncoder();
+
+        // Add current data to buffers
+        positionBuffer[velocityIndex] = currentPosition;
+        timeBuffer[velocityIndex] = currentTime;
+
+        // Compute velocity if buffer has at least two samples
+        float velocity = 0.0;
+        if (bufferFilled || velocityIndex > 0) {
+            int samplesToUse = bufferFilled ? VELOCITY_SAMPLES : velocityIndex;
+            for (int i = 0; i < samplesToUse - 1; i++) {
+                int index1 = (velocityIndex + i) % VELOCITY_SAMPLES;
+                int index2 = (index1 + 1) % VELOCITY_SAMPLES;
+
+                // Calculate velocity between consecutive samples
+                float deltaPos = positionBuffer[index2] - positionBuffer[index1];
+                float deltaTime = (timeBuffer[index2] - timeBuffer[index1]) / 1000.0; // Convert ms to s
+                if (deltaTime > 0) {
+                    velocity += deltaPos / deltaTime;
+                }
+            }
+            // Average the velocity
+            velocity /= (samplesToUse - 1);
+        }
+        // Log data
         logFile.print(currentTime);
         logFile.print(", ");
-        logFile.println(position);
+        logFile.print(currentPosition);
+        logFile.print(", ");
+        logFile.println(velocity);
+
+        // Update buffer index
+        velocityIndex = (velocityIndex + 1) % VELOCITY_SAMPLES;
+        if (velocityIndex == 0) {
+            bufferFilled = true;
+        }
     }
 }
+
