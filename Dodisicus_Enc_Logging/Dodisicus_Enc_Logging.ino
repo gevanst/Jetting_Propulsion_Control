@@ -1,5 +1,5 @@
 // Teensy Encoder Logger for AMT22 12-bit Encoder
-// Logs time and position to an SD card using a buffer
+// Logs time and position to an SD card in human-readable format
 
 #include <SD.h>
 #include <SPI.h>
@@ -26,16 +26,7 @@ int logFileCount = 1;
 Metro logTimer(2); // Logging interval 
 
 // SPI Settings for Encoder
-const SPISettings encoderSPISettings(1000000, MSBFIRST, SPI_MODE0);// 1mhz clock, spi mode 0
-
-// Buffer for batched writing
-struct LogEntry {
-    unsigned long time;
-    uint16_t position;
-};
-const int BUFFER_SIZE = 100; // Number of entries in the buffer
-LogEntry logBuffer[BUFFER_SIZE];
-int bufferIndex = 0;
+const SPISettings encoderSPISettings(1000000, MSBFIRST, SPI_MODE0); // 1 MHz clock, SPI mode 0
 
 void setup() {
     pinMode(encoderCS, OUTPUT);
@@ -74,7 +65,6 @@ void loop() {
         } else if (currentSwitchState == LOW && systemState == 1) {
             systemState = 0;
             digitalWrite(ledPin, LOW);
-            flushBuffer(); // Ensure any remaining data in the buffer is written
             if (logFile) {
                 logFile.close();
             }
@@ -85,7 +75,7 @@ void loop() {
         logData();
     }
 
-    lastSwitchState = currentSwitchState; //reset switch state
+    lastSwitchState = currentSwitchState; // Reset switch state
 }
 
 uint16_t readEncoder() {
@@ -125,7 +115,7 @@ bool verifyChecksumSPI(uint16_t message) {
 
 void initializeLogFileCount() {
     while (true) {
-        String fileName = "Log_encoder_" + String(logFileCount) + ".bin";
+        String fileName = "Log_encoder_" + String(logFileCount) + ".txt";
         if (!SD.sdfs.exists(fileName.c_str())) {
             break;
         }
@@ -134,34 +124,23 @@ void initializeLogFileCount() {
 }
 
 void createNewLogFile() {
-    String fileName = "Log_encoder_" + String(logFileCount) + ".bin";
+    String fileName = "Log_encoder_" + String(logFileCount) + ".txt";
     logFile = SD.sdfs.open(fileName.c_str(), O_WRITE | O_CREAT | O_TRUNC);
     if (logFile) {
         logFileCount++;
+        // Write a header for readability
+        logFile.println("Time (ms), Position");
     }
 }
 
 void logData() {
-    if (systemState == 1) {
+    if (systemState == 1 && logFile) {
         unsigned long currentTime = millis();
         uint16_t position = readEncoder();
 
-        // Add entry to buffer
-        logBuffer[bufferIndex].time = currentTime;
-        logBuffer[bufferIndex].position = position;
-        bufferIndex++;
-
-        // If buffer is full, write to SD card
-        if (bufferIndex >= BUFFER_SIZE) {
-            flushBuffer();
-        }
-    }
-}
-
-void flushBuffer() {
-    if (bufferIndex > 0 && logFile) {
-        logFile.write((uint8_t *)logBuffer, bufferIndex * sizeof(LogEntry));
-        logFile.flush(); // Ensure data is saved to SD card
-        bufferIndex = 0; // Reset buffer index
+        // Write time and position in CSV format
+        logFile.print(currentTime);
+        logFile.print(", ");
+        logFile.println(position);
     }
 }

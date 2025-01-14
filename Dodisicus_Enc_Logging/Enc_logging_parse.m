@@ -1,49 +1,35 @@
-clear,clc
-filename = 'Log_encoder_2.bin'; 
+% MATLAB script to plot CSV data from Teensy encoder logger
 
-% Open the file in binary read mode
-fileID = fopen(filename, 'rb');
-if fileID == -1
-    error('Error: Unable to open file %s', filename);
-end
+% Specify the CSV file to read
+filename = 'Log_encoder_9.txt'; % Replace with your actual file name
 
-% Read the entire file as little-endian binary data
-rawData = fread(fileID, 'uint8');
-fclose(fileID);
+% Read the CSV file and display available column names
+data = readtable(filename, 'Delimiter', ',', 'ReadVariableNames', true);
+disp('Available variable names in the CSV:');
+disp(data.Properties.VariableNames);
 
-% Define record size based on the LogEntry structure
-recordSize = 4 + 2; % 4 bytes for time + 2 bytes for position = 6 bytes
-numRecords = floor(length(rawData) / recordSize);
+% Manually correct the variable names based on actual CSV header
+time_var = data.Properties.VariableNames{1}; % Assume first column is time
+position_var = data.Properties.VariableNames{2}; % Assume second column is position
 
-% Initialize arrays for time and position
-timeData = zeros(numRecords, 1, 'uint32');
-positionData = zeros(numRecords, 1, 'uint16');
+% Extract time and position data dynamically
+time_ms = data.(time_var);
+position = data.(position_var);
 
-% Parse each record
-for i = 1:numRecords
-    % Calculate the start index of the current record
-    startIdx = (i - 1) * recordSize + 1;
-    
-    % Extract time (4 bytes, little-endian)
-    timeData(i) = typecast(uint8(rawData(startIdx:startIdx+3)), 'uint32');
-    
-    % Extract position (2 bytes, little-endian)
-    positionData(i) = typecast(uint8(rawData(startIdx+4:startIdx+5)), 'uint16');
-end
+% Convert time from milliseconds to seconds
+time_seconds = time_ms / 1000;
 
-% Convert time to seconds (assuming time is in milliseconds)
-timeInSeconds = double(timeData) / 1000;
-
-% Plot the parsed data
+% Plot the data
 figure;
-plot(timeInSeconds, positionData, '-o');
+plot(time_seconds, position, '-o', 'LineWidth', 1.5);
 xlabel('Time (s)');
-ylabel('Position');
+ylabel('Encoder Position');
 title('Encoder Position Over Time');
 grid on;
 
-% Save parsed data to a .mat file for further analysis
-save('parsed_encoder_data.mat', 'timeInSeconds', 'positionData');
-
-% Display summary
-fprintf('Parsed %d records from %s.\n', numRecords, filename);
+% Display basic statistics
+fprintf('Data Stats:\n');
+fprintf('Total Records: %d\n', height(data));
+fprintf('Start Time: %.2f s\n', time_seconds(1));
+fprintf('End Time: %.2f s\n', time_seconds(end));
+fprintf('Position Range: %d to %d\n', min(position), max(position));
