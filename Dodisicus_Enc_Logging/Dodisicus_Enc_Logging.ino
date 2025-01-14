@@ -41,6 +41,8 @@ uint16_t positionBuffer[VELOCITY_SAMPLES] = {0};
 unsigned long timeBuffer[VELOCITY_SAMPLES] = {0};
 int velocityIndex = 0;
 bool bufferFilled = false;
+float velocityBuffer[VELOCITY_SAMPLES] = {0};
+int accelerationIndex = 0;
 
 
 void setup() {
@@ -161,11 +163,11 @@ void logData() {
         unsigned long currentTime = millis();
         uint16_t currentPosition = readEncoder();
 
-        // Add current data to buffers
+        // Add current data to position and time buffers
         positionBuffer[velocityIndex] = currentPosition;
         timeBuffer[velocityIndex] = currentTime;
 
-        // Compute velocity if buffer has at least two samples
+        // Compute velocity
         float velocity = 0.0;
         if (bufferFilled || velocityIndex > 0) {
             int samplesToUse = bufferFilled ? VELOCITY_SAMPLES : velocityIndex;
@@ -173,22 +175,41 @@ void logData() {
                 int index1 = (velocityIndex + i) % VELOCITY_SAMPLES;
                 int index2 = (index1 + 1) % VELOCITY_SAMPLES;
 
-                // Calculate position difference with wraparound handling
+                // Position difference with wraparound handling
                 int32_t deltaPos = positionBuffer[index2] - positionBuffer[index1];
-                if (deltaPos > 2048) { // Forward wraparound
-                    deltaPos -= 4096;
-                } else if (deltaPos < -2048) { // Reverse wraparound
-                    deltaPos += 4096;
+                if (deltaPos > 2048) {
+                    deltaPos -= 4096; // Forward wraparound
+                } else if (deltaPos < -2048) {
+                    deltaPos += 4096; // Reverse wraparound
                 }
 
-                float deltaTime = (timeBuffer[index2] - timeBuffer[index1]) / 1000.0; // Convert ms to s
+                float deltaTime = (timeBuffer[index2] - timeBuffer[index1]) / 1000.0; // ms to s
                 if (deltaTime > 0) {
                     velocity += deltaPos / deltaTime;
                 }
             }
+            velocity /= (samplesToUse - 1); // Average velocity
+        }
 
-            // Average the velocity
-            velocity /= (samplesToUse - 1);
+        // Add velocity to velocity buffer
+        velocityBuffer[accelerationIndex] = velocity;
+
+        // Compute acceleration
+        float acceleration = 0.0;
+        if (bufferFilled || accelerationIndex > 0) {
+            int samplesToUse = bufferFilled ? VELOCITY_SAMPLES : accelerationIndex;
+            for (int i = 0; i < samplesToUse - 1; i++) {
+                int index1 = (accelerationIndex + i) % VELOCITY_SAMPLES;
+                int index2 = (index1 + 1) % VELOCITY_SAMPLES;
+
+                // Velocity difference
+                float deltaVel = velocityBuffer[index2] - velocityBuffer[index1];
+                float deltaTime = (timeBuffer[index2] - timeBuffer[index1]) / 1000.0; // ms to s
+                if (deltaTime > 0) {
+                    acceleration += deltaVel / deltaTime;
+                }
+            }
+            acceleration /= (samplesToUse - 1); // Average acceleration
         }
 
         // Log data
@@ -196,10 +217,13 @@ void logData() {
         logFile.print(", ");
         logFile.print(currentPosition);
         logFile.print(", ");
-        logFile.println(velocity);
+        logFile.print(velocity);
+        logFile.print(", ");
+        logFile.println(acceleration);
 
-        // Update buffer index
+        // Update buffer indices
         velocityIndex = (velocityIndex + 1) % VELOCITY_SAMPLES;
+        accelerationIndex = velocityIndex; // Align acceleration with velocity buffer
         if (velocityIndex == 0) {
             bufferFilled = true;
         }
