@@ -1,5 +1,13 @@
-// Teensy Encoder Logger for AMT22 12-bit Encoder
-// Logs time and position to an SD card in human-readable format
+// test script to log encoder and time data with a timer to ensure consistent logging. Test SPI communcation, test SD log with DMA drivers.
+// HARDWARE:
+// MCU - teensy 4.1 600 MHz clock
+// Encoder - AMT 222A-V absoulte 12-bit encoder with SPI communication (get pos command: 0X00 0X00)
+// SD card - Samsung 128 GB pro ultimate sdxc UHS-1 formatted: FAT32
+// Motor Driver IC - TI LMD18200 3A, 55V H-Bridge
+// DC Motor - Pittman brushed dc motor 12v
+// Battery - 2200 mAh 3 cell 11.1v LiPO battery
+// DC-DC converter - PTR08060W 12v->5v
+// logs: time, encoder position in csv format
 
 #include <SD.h>
 #include <SPI.h>
@@ -11,7 +19,7 @@ const int encoderCS = 0; // Chip select for encoder
 const int ledPin = LED_BUILTIN;
 const int magSwitchPin = 4;
 
-const int RESOLUTION = 12;
+const int RESOLUTION = 12; // 12-bit resolution of the encoder
 
 // State Variables
 bool lastSwitchState = HIGH;
@@ -23,7 +31,7 @@ unsigned long lastSwitchTime = 0;
 // SD Card and Logging
 FsFile logFile;
 int logFileCount = 1;
-Metro logTimer(2); // Logging interval 
+Metro logTimer(2); // Logging interval 1 - 1kHz, 2 - 500Hz, 10 - 100Hz, etc.
 
 // SPI Settings for Encoder
 const SPISettings encoderSPISettings(1000000, MSBFIRST, SPI_MODE0); // 1 MHz clock, SPI mode 0
@@ -53,30 +61,38 @@ void setup() {
 
 void loop() {
     currentSwitchState = digitalRead(magSwitchPin);
-    if (lastSwitchState != currentSwitchState) {
-        lastSwitchTime = millis();
-    }
 
-    if (millis() - lastSwitchTime >= debounceInterval) {
-        if (currentSwitchState == HIGH && systemState == 0) {
-            systemState = 1;
-            digitalWrite(ledPin, HIGH);
-            createNewLogFile();
-        } else if (currentSwitchState == LOW && systemState == 1) {
-            systemState = 0;
-            digitalWrite(ledPin, LOW);
-            if (logFile) {
-                logFile.close();
+    // Detect a LOW to HIGH transition (magnet waved past sensor)
+    if (currentSwitchState == HIGH && lastSwitchState == LOW) {
+        // Ensure the switch is stable for debounceInterval
+        if (millis() - lastSwitchTime >= debounceInterval) {
+            // Toggle the system state
+            if (systemState == 0) {
+                systemState = 1; // Start logging
+                digitalWrite(ledPin, HIGH); // Turn on LED
+                createNewLogFile();
+            } else {
+                systemState = 0; // Stop logging
+                digitalWrite(ledPin, LOW); // Turn off LED
+                if (logFile) {
+                    logFile.close();
+                }
             }
+
+            // Update the last switch time
+            lastSwitchTime = millis();
         }
     }
 
+    // Log data only when the system is in state 1
     if (logTimer.check() && systemState == 1) {
         logData();
     }
 
-    lastSwitchState = currentSwitchState; // Reset switch state
+    // Update the last switch state
+    lastSwitchState = currentSwitchState;
 }
+
 
 uint16_t readEncoder() {
     SPI1.beginTransaction(encoderSPISettings);

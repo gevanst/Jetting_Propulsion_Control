@@ -1,7 +1,7 @@
 % MATLAB script to plot CSV data from Teensy encoder logger
 
 % Specify the CSV file to read
-filename = 'Log_encoder_9.txt'; % Replace with your actual file name
+filename = 'Log_encoder_12.txt'; % Replace with your actual file name
 
 % Read the CSV file and display available column names
 data = readtable(filename, 'Delimiter', ',', 'ReadVariableNames', true);

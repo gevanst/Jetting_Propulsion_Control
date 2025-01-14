@@ -52,7 +52,7 @@ float velocityHistory[5] = {0}; // History for averaging velocity
 float accelerationHistory[5] = {0}; // History for averaging acceleration
 int historyIndex = 0;
 
-Metro logTimer(1);
+Metro logTimer(2);
 
 void setup() {
   pinMode(chipSelect1, OUTPUT); // set up chipselct pin mode for encoder comms
@@ -68,7 +68,7 @@ void setup() {
 
   pinMode(MagS, INPUT); // will read as high or low
 
-  SPI.begin();
+  SPI1.begin();
 
   if (!SD.sdfs.begin(SdioConfig(DMA_SDIO))) { // Initialize SD card with DMA support
       while (true) {//visual warning it failed
@@ -125,13 +125,32 @@ void loop() {
 
 }
 
-uint16_t ReadEnc(){
-  digitalWrite(chipSelect1, LOW); // set to active state
-  uint16_t encoderPos = SPI.transfer(0x00) << 8; //shift up 8 bits beacuse this is the high byte
-  encoderPos |= SPI.transfer(0x00);
-  encoderPos &= 0x3FFF; // discard upper two checksum bits
-  digitalWrite(chipSelect1, HIGH); // set back to inactive state to prevent conflicts?
-  return encoderPos;
+uint16_t readEncoder() {
+    SPI1.beginTransaction(encoderSPISettings);
+    digitalWrite(encoderCS, LOW); // Activate CS
+    delayMicroseconds(3);
+    uint8_t highByte = SPI1.transfer(0x00);
+    delayMicroseconds(3);
+    uint8_t lowByte = SPI1.transfer(0x00);
+    delayMicroseconds(3);
+    digitalWrite(encoderCS, HIGH); // Deactivate CS
+    SPI1.endTransaction();
+    uint16_t encoderPosition = (highByte << 8) | lowByte;
+    if (verifyChecksumSPI(encoderPosition)) { //verify data
+        encoderPosition &= 0x3FFF; // Discard upper two checksum bits
+        if (RESOLUTION == 12) encoderPosition >>= 2; // Adjust for 12-bit resolution
+        return encoderPosition; // Return valid position
+    } else {
+        return 0xFFFF; // Return error code if bad
+    }
+}
+
+bool verifyChecksumSPI(uint16_t message) {
+    uint16_t checksum = 0x3;
+    for (int i = 0; i < 14; i += 2) {
+        checksum ^= (message >> i) & 0x3;
+    }
+    return checksum == (message >> 14);
 }
 
 void createNewLogFile() {
