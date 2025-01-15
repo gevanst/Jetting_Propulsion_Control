@@ -154,7 +154,7 @@ void createNewLogFile() {
     if (logFile) {
         logFileCount++;
         // Write a header
-        logFile.println("Time (ms), Position (count), Velocity (count/s)");
+        logFile.println("Time (ms), Position (count), Velocity (count/s), Acceleration (count/s^2)");
     }
 }
 
