@@ -1,28 +1,23 @@
 clear,clc
-% Specify the CSV file to read
-filename = 'Log_encoder_vel3.txt'; % Replace with your actual file name
 
-% Read the CSV file and display available column names
+filename = 'Log_encoder_vel3.txt';
+
 data = readtable(filename, 'Delimiter', ',', 'ReadVariableNames', true);
 disp('Available variable names in the CSV:');
 disp(data.Properties.VariableNames);
 
-% Manually correct the variable names based on actual CSV header
-time_var = data.Properties.VariableNames{1}; % Assume first column is time
-position_var = data.Properties.VariableNames{2}; % Assume second column is position
+time_var = data.Properties.VariableNames{1};
+position_var = data.Properties.VariableNames{2}; 
 vel_var = data.Properties.VariableNames{3};
 acc_var = data.Properties.VariableNames{4};
 
-% Extract time and position data dynamically
+
 time_ms = data.(time_var);
 position = data.(position_var);
 vel = data.(vel_var);
 acc = data.(acc_var);
-
-% Convert time from milliseconds to seconds
 time_seconds = time_ms / 1000;
 
-% Plot the data
 figure;
 subplot(3,1,1);
 plot(time_seconds,position,'-x')
@@ -38,7 +33,6 @@ subplot(3,1,3);
 plot(time_seconds,acc,'-o')
 ylabel('acc (counts/s^2)')
 
-% Display basic statistics
 fprintf('Data Stats:\n');
 fprintf('Total Records: %d\n', height(data));
 fprintf('Start Time: %.2f s\n', time_seconds(1));

@@ -17,7 +17,7 @@
 
 #define LOG_BUFFER_SIZE 1024 //entries, 4bytes for time, vel, accel, motorcurrent, 2 bytes for the rest
 #define VELOCITY_HISTORY_SIZE 5 //
-#define RESOLUTION 12
+#define RESOLUTION 12 // 12- bit resoltion of the encoder
 
 String Prog = "prog_05Hz_256pts.txt"; // velocity program name
 int velProgram[256][3]; //may change depending on program loaded
@@ -38,6 +38,8 @@ struct LogEntry {
   float motorCurrent;
 };
 
+int logFileCount = 1;
+
 LogEntry logBuffer[LOG_BUFFER_SIZE];
 volatile int logBufferWriteIndex = 0;
 volatile int logBufferReadIndex = 0;
@@ -53,9 +55,9 @@ const int mDIR = 2; // direction signal for motor driver IC (high or low to swit
 
 const int MagS = 4; //input pin for magnetic sensor to turn on jetting
 
-const int Kp = 40; // Proportional Control Gain
+const int Kp = 10; // Proportional Control Gain
 const int Kd = 1; // Derivative Control Gain
-const int Ki = 20; // Integral Control Gain
+const int Ki = 0; // Integral Control Gain
 
 bool LastSwitchState = HIGH; //mag switch/sensor is normally open (hamlin 59140 1-U-02-A)
 bool SwitchState = LOW;
@@ -69,12 +71,15 @@ float currentAcceleration = 0;
 int desiredVelocity = 0;
 int desiredAcceleration = 0;
 int controlSignal = 0;
-
+static float integralError = 0;
+static float lastError = 0;
 static unsigned long lastUpdateTime = 0;
 
 float velocityHistory[VELOCITY_HISTORY_SIZE] = {0}; // History for averaging velocity
 float accelerationHistory[VELOCITY_HISTORY_SIZE] = {0}; // History for averaging acceleration
 int historyIndex = 0;
+uint16_t positionBuffer[VELOCITY_HISTORY_SIZE] = {0}; // Circular buffer for position
+unsigned long timeBuffer[VELOCITY_HISTORY_SIZE] = {0}; // Circular buffer for timestamps
 
 Metro logTimer(2); //500Hz
 Metro pidTimer(10); //100hz
@@ -111,9 +116,9 @@ void setup() {
   if (!SD.sdfs.begin(SdioConfig(DMA_SDIO))) { // Initialize SD card with DMA support
       while (true) {//visual warning it failed
           digitalWrite(ledPin, HIGH);// toggle the led on and off indicating that it didn't initalize the sd card
-          delay(100);
+          delay(1000);
           digitalWrite(ledPin, LOW);
-          delay(100);
+          delay(1000);
       }
   }
 
@@ -148,20 +153,27 @@ void loop() {
   if (pidTimer.check() && State ==1) {
     //pid loop
     unsigned long currentTime = millis();
-    float dt = (currentTime - lastUpdateTime)/1000; //convert to seconds
+    float dt = (currentTime - lastUpdateTime)/1000.0f ;//s
     lastUpdateTime = currentTime;
     uint16_t position = readEncoder();
-    updateVelocityAcceleration(position, dt);
-    getDesiredState(position, desiredVel, desiredAcc);
+    if (position != 0xFFFF) {// if it is a good encoder read run compute PID control signal
+      updateVelocityAcceleration(position,dt);
+      getDesiredState(position, desiredVelocity, desiredAcceleration);
+      controlSignal = computePID(desiredVelocity, currentVelocity, desiredAcceleration, dt);
+      setMotor(controlSignal > 0 ? 1:-1, abs(controlSignal), mPWM, mDIR);//check diretion of control signal and set motor
+    }
   }
 
   if (logTimer.check() && State == 1) {
     unsigned long currentTime = millis();
     float motorCurrent = getMotorCurrent();
-    logData(currentTime, velocityHistory[historyIndex], currentVelocity, currentAcceleration, desiredVelocity, desiredAcceleration, controlSignal, motorCurrent);
+    uint16_t position = readEncoder();
+    logData(currentTime, position, currentVelocity, currentAcceleration, desiredVelocity, desiredAcceleration, controlSignal, motorCurrent);
   }
 
   flushLogToSD();
+
+  LastSwitchState = SwitchState;
 
 }
 
@@ -173,7 +185,7 @@ uint16_t readEncoder() {
     delayMicroseconds(3);
     uint8_t lowByte = SPI1.transfer(0x00);
     delayMicroseconds(3);
-    digitalWrite(encoderCS, HIGH); // Deactivate CS
+    digitalWrite(chipSelect1, HIGH); // Deactivate CS
     SPI1.endTransaction();
     uint16_t encoderPosition = (highByte << 8) | lowByte;
     if (verifyChecksumSPI(encoderPosition)) { //verify data
@@ -204,32 +216,66 @@ void initializeLogFileCount() {
 }
 
 void updateVelocityAcceleration(uint16_t position, float dt) {
-    int32_t deltaPosition = position - velocityHistory[historyIndex];
-    if (deltaPosition > 2048) {
-        deltaPosition -= 4096;
-    }
-    if (deltaPosition < -2048) {
-        deltaPosition += 4096;
+    static int velocityIndex = 0;
+    static bool bufferFilled = false;
+
+    // Store current position and timestamp in buffers
+    positionBuffer[velocityIndex] = position;
+    timeBuffer[velocityIndex] = millis();
+
+    // Compute velocity
+    float velocity = 0.0;
+    if (bufferFilled || velocityIndex > 0) {
+        int samplesToUse = bufferFilled ? VELOCITY_HISTORY_SIZE : velocityIndex;
+        for (int i = 0; i < samplesToUse - 1; i++) {
+            int index1 = (velocityIndex + i) % VELOCITY_HISTORY_SIZE;
+            int index2 = (index1 + 1) % VELOCITY_HISTORY_SIZE;
+
+            // Position difference with wraparound handling
+            int32_t deltaPos = positionBuffer[index2] - positionBuffer[index1];
+            if (deltaPos > 2048) {
+                deltaPos -= 4096; // Forward wraparound
+            } else if (deltaPos < -2048) {
+                deltaPos += 4096; // Reverse wraparound
+            }
+
+            float deltaTime = (timeBuffer[index2] - timeBuffer[index1]) / 1000.0; // ms to s
+            if (deltaTime > 0) {
+                velocity += deltaPos / deltaTime;
+            }
+        }
+        velocity /= (samplesToUse - 1); // Average velocity
     }
 
-    float velocity = deltaPosition / dt;
-    float acceleration = (velocity - velocityHistory[historyIndex]) / dt;
+    // Compute acceleration
+    float acceleration = 0.0;
+    if (bufferFilled || velocityIndex > 1) {
+        int samplesToUse = bufferFilled ? VELOCITY_HISTORY_SIZE : velocityIndex;
+        for (int i = 0; i < samplesToUse - 1; i++) {
+            int index1 = (velocityIndex + i) % VELOCITY_HISTORY_SIZE;
+            int index2 = (index1 + 1) % VELOCITY_HISTORY_SIZE;
 
-    // Update history
-    velocityHistory[historyIndex] = velocity;
-    accelerationHistory[historyIndex] = acceleration;
-    historyIndex = (historyIndex + 1) % VELOCITY_HISTORY_SIZE;
-
-    // Compute average velocity and acceleration
-    currentVelocity = 0;
-    currentAcceleration = 0;
-    for (int i = 0; i < VELOCITY_HISTORY_SIZE; i++) {
-        currentVelocity += velocityHistory[i];
-        currentAcceleration += accelerationHistory[i];
+            // Velocity difference
+            float deltaVel = velocity - velocityHistory[index1];
+            float deltaTime = (timeBuffer[index2] - timeBuffer[index1]) / 1000.0; // ms to s
+            if (deltaTime > 0) {
+                acceleration += deltaVel / deltaTime;
+            }
+        }
+        acceleration /= (samplesToUse - 1); // Average acceleration
     }
-    currentVelocity /= VELOCITY_HISTORY_SIZE;
-    currentAcceleration /= VELOCITY_HISTORY_SIZE;
+
+    // Update current values
+    currentVelocity = velocity;
+    currentAcceleration = acceleration;
+
+    // Update buffer index and mark as filled if necessary
+    velocityIndex = (velocityIndex + 1) % VELOCITY_HISTORY_SIZE;
+    if (velocityIndex == 0) {
+        bufferFilled = true;
+    }
 }
+
 
 
 void getDesiredState(uint16_t position, int &v_desired, int &a_desired) {
@@ -264,9 +310,6 @@ void getDesiredState(uint16_t position, int &v_desired, int &a_desired) {
 
 
 float computePID(int v_desired, float v_measured, int a_desired, float dt) {
-    static float integralError = 0;
-    static float lastError = 0;
-
     float error = v_desired - v_measured;
     integralError += error * dt;
     float derivativeError = (error - lastError) / dt;
@@ -280,11 +323,11 @@ float getMotorCurrent() {
 }
 
 void createNewLogFile() {
-    String fileName = "Log_05Hz_256pts_" + String(logFileCount) + ".txt";
+    String fileName = "Test_Log_05Hz_256pts_" + String(logFileCount) + ".txt";
     logFile = SD.sdfs.open(fileName.c_str(), O_WRITE | O_CREAT | O_TRUNC);// open for write, create file if doens't exist, overwrite if file exists
     if (logFile) {
         logFileCount++; // Increment the file count for the next log file
-        logFile.println("Time (ms), Position");
+        logFile.println("Time (ms), Position (count), Velocity (count/s), Acceleration (count/s2), Desired Vel, Desired Acc, control signal, motorCurrent (raw)");
     }
 }
 
@@ -307,9 +350,9 @@ void flushLogToSD() {
         logFile.print(", ");
         logFile.print(entry.acceleration);
         logFile.print(", ");
-        logFile.print(entry.v_desired);
+        logFile.print(entry.vel_d);
         logFile.print(", ");
-        logFile.print(entry.a_desired);
+        logFile.print(entry.acc_d);
         logFile.print(", ");
         logFile.print(entry.controlSignal);
         logFile.print(", ");
@@ -320,19 +363,31 @@ void flushLogToSD() {
 }
 
 void loadVelProgram() {
-  File file = SD.sdsf.open(Prog.c_str(), O_READ);
+  FsFile file = SD.sdfs.open(Prog.c_str(), O_READ);
   if (file) {
     velProgLength = 0;
     while (file.available() && velProgLength < 256) {
+      digitalWrite(ledPin, HIGH);
+      delay(100); // Blink LED at 250ms intervals while loading
+      digitalWrite(ledPin, LOW);
+      delay(100);
       String line = file.readStringUntil('\n'); //read until the new line
       int separator1 = line.indexOf(',');//find first comma in string
       int separator2 = line.indexOf(',', separator1 + 1);//find second comma in string by starting after the first comma
       if (separator1 > 0 && separator2 > 0) {
-        velocityProgram[velProgLength][0] = line.substring(0, separator1).toInt(); // Position
-        velocityProgram[velProgLength][1] = line.substring(separator1 + 1, separator2).toInt(); // Velocity
-        velocityProgram[velProgLength][2] = line.substring(separator2 + 1).toInt(); // Acceleration
+        velProgram[velProgLength][0] = line.substring(0, separator1).toInt(); // Position
+        velProgram[velProgLength][1] = line.substring(separator1 + 1, separator2).toInt(); // Velocity
+        velProgram[velProgLength][2] = line.substring(separator2 + 1).toInt(); // Acceleration
         velProgLength++;
     }
+    }
+  }
+  else {
+    while(true) {
+      digitalWrite(ledPin, HIGH);
+      delay (1000);
+      digitalWrite(ledPin, LOW);
+      delay(1000);
     }
   }
 }
