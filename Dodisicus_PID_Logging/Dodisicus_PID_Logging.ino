@@ -55,8 +55,8 @@ const int mDIR = 2; // direction signal for motor driver IC (high or low to swit
 
 const int MagS = 4; //input pin for magnetic sensor to turn on jetting
 
-const int Kp = 10; // Proportional Control Gain
-const int Kd = 1; // Derivative Control Gain
+const int Kp = 1; // Proportional Control Gain
+const int Kd = 0.1; // Derivative Control Gain
 const int Ki = 0; // Integral Control Gain
 
 bool LastSwitchState = HIGH; //mag switch/sensor is normally open (hamlin 59140 1-U-02-A)
@@ -71,18 +71,17 @@ float currentAcceleration = 0;
 int desiredVelocity = 0;
 int desiredAcceleration = 0;
 int controlSignal = 0;
-static float integralError = 0;
-static float lastError = 0;
-static unsigned long lastUpdateTime = 0;
+float integralError = 0;
+float lastError = 0;
+unsigned long lastUpdateTime = 0;
 
-float velocityHistory[VELOCITY_HISTORY_SIZE] = {0}; // History for averaging velocity
-float accelerationHistory[VELOCITY_HISTORY_SIZE] = {0}; // History for averaging acceleration
-int historyIndex = 0;
-uint16_t positionBuffer[VELOCITY_HISTORY_SIZE] = {0}; // Circular buffer for position
-unsigned long timeBuffer[VELOCITY_HISTORY_SIZE] = {0}; // Circular buffer for timestamps
+static int velocityIndex = 0;        // ring buffer index
+static bool bufferFilled = false;    // indicates if we've wrapped around
+uint16_t positionBuffer[VELOCITY_HISTORY_SIZE] = {0};
+unsigned long timeBuffer[VELOCITY_HISTORY_SIZE] = {0};
+float velocityHistory[VELOCITY_HISTORY_SIZE] = {0}; // used to compute acceleration
 
-Metro logTimer(2); //500Hz
-Metro pidTimer(10); //100hz
+Metro MainTimer(3);
 
 // Function Declarations
 void loadVelProgram();
@@ -90,7 +89,7 @@ void initializeLogFileCount();
 void createNewLogFile();
 uint16_t readEncoder();
 float getMotorCurrent();
-void updateVelocityAcceleration(uint16_t position, float dt);
+void updateVelocityAcceleration(uint16_t position);
 void getDesiredState(uint16_t position, int &v_desired, int &a_desired);
 float computePID(int v_desired, float v_measured, int a_desired, float dt);
 void setMotor(int dir, int dc, int pwmPin, int dirPin);
@@ -141,6 +140,8 @@ void loop() {
       }
       else {
         State = 0;
+        pinMode(mPWM,OUTPUT);
+        digitalWrite(mPWM, LOW);
         digitalWrite(ledPin, LOW);
         if (logFile) {
           logFile.close();
@@ -150,26 +151,32 @@ void loop() {
     }
   }
 
-  if (pidTimer.check() && State ==1) {
-    //pid loop
+  if (MainTimer.check() && State == 1) {
     unsigned long currentTime = millis();
-    float dt = (currentTime - lastUpdateTime)/1000.0f ;//s
+    float dt = (currentTime - lastUpdateTime) / 1000.0f;
     lastUpdateTime = currentTime;
-    uint16_t position = readEncoder();
-    if (position != 0xFFFF) {// if it is a good encoder read run compute PID control signal
-      updateVelocityAcceleration(position,dt);
-      getDesiredState(position, desiredVelocity, desiredAcceleration);
-      controlSignal = computePID(desiredVelocity, currentVelocity, desiredAcceleration, dt);
-      setMotor(controlSignal > 0 ? 1:-1, abs(controlSignal), mPWM, mDIR);//check diretion of control signal and set motor
-    }
-  }
 
-  if (logTimer.check() && State == 1) {
-    unsigned long currentTime = millis();
-    float motorCurrent = getMotorCurrent();
+    // 1) Read encoder
     uint16_t position = readEncoder();
-    logData(currentTime, position, currentVelocity, currentAcceleration, desiredVelocity, desiredAcceleration, controlSignal, motorCurrent);
-  }
+    if (position != 0xFFFF) {
+      // 2) Update velocity & accel via partial sums
+      updateVelocityAcceleration(position);
+
+      // 3) Desired states
+      getDesiredState(position, desiredVelocity, desiredAcceleration);
+
+      // 4) PID
+      controlSignal = computePID(desiredVelocity, currentVelocity, desiredAcceleration, dt);
+
+      // 5) Set motor
+      setMotor((controlSignal > 0 ? 1 : -1), abs(controlSignal), mPWM, mDIR);
+
+      // 6) Log data immediately after
+      float motorCurrent = getMotorCurrent();
+      unsigned long now = millis();
+      logData(now, position, currentVelocity, currentAcceleration, desiredVelocity, desiredAcceleration, controlSignal, motorCurrent);
+    }
+  }    
 
   flushLogToSD();
 
@@ -215,68 +222,76 @@ void initializeLogFileCount() {
     }
 }
 
-void updateVelocityAcceleration(uint16_t position, float dt) {
-    static int velocityIndex = 0;
-    static bool bufferFilled = false;
+void updateVelocityAcceleration(uint16_t position) {
+  // Store current position & time in ring buffers
+  positionBuffer[velocityIndex] = position;
+  timeBuffer[velocityIndex] = millis();
 
-    // Store current position and timestamp in buffers
-    positionBuffer[velocityIndex] = position;
-    timeBuffer[velocityIndex] = millis();
+  // Compute velocity (partial sums)
+  float velocity = 0.0f;
+  if (bufferFilled || velocityIndex > 0) {
+    int samplesToUse = bufferFilled ? VELOCITY_HISTORY_SIZE : velocityIndex;
+    if (samplesToUse > 1) {
+      // Sum partial intervals
+      for (int i = 0; i < samplesToUse - 1; i++) {
+        int index1 = (velocityIndex + i) % VELOCITY_HISTORY_SIZE;
+        int index2 = (index1 + 1) % VELOCITY_HISTORY_SIZE;
 
-    // Compute velocity
-    float velocity = 0.0;
-    if (bufferFilled || velocityIndex > 0) {
-        int samplesToUse = bufferFilled ? VELOCITY_HISTORY_SIZE : velocityIndex;
-        for (int i = 0; i < samplesToUse - 1; i++) {
-            int index1 = (velocityIndex + i) % VELOCITY_HISTORY_SIZE;
-            int index2 = (index1 + 1) % VELOCITY_HISTORY_SIZE;
+        // Wrap-corrected deltaPos
+        int32_t deltaPos = positionBuffer[index2] - positionBuffer[index1];
+        if (deltaPos > 2048) deltaPos -= 4096;
+        else if (deltaPos < -2048) deltaPos += 4096;
 
-            // Position difference with wraparound handling
-            int32_t deltaPos = positionBuffer[index2] - positionBuffer[index1];
-            if (deltaPos > 2048) {
-                deltaPos -= 4096; // Forward wraparound
-            } else if (deltaPos < -2048) {
-                deltaPos += 4096; // Reverse wraparound
-            }
-
-            float deltaTime = (timeBuffer[index2] - timeBuffer[index1]) / 1000.0; // ms to s
-            if (deltaTime > 0) {
-                velocity += deltaPos / deltaTime;
-            }
+        // Time difference
+        unsigned long t1 = timeBuffer[index1];
+        unsigned long t2 = timeBuffer[index2];
+        if (t2 >= t1) {
+          float dtSec = (t2 - t1) / 1000.0f;
+          if (dtSec > 0) {
+            velocity += (deltaPos / dtSec);
+          }
         }
-        velocity /= (samplesToUse - 1); // Average velocity
+      }
+      velocity /= (samplesToUse - 1);
     }
+  }
 
-    // Compute acceleration
-    float acceleration = 0.0;
-    if (bufferFilled || velocityIndex > 1) {
-        int samplesToUse = bufferFilled ? VELOCITY_HISTORY_SIZE : velocityIndex;
-        for (int i = 0; i < samplesToUse - 1; i++) {
-            int index1 = (velocityIndex + i) % VELOCITY_HISTORY_SIZE;
-            int index2 = (index1 + 1) % VELOCITY_HISTORY_SIZE;
+  // Now store velocity so we can do partial-sums for acceleration
+  velocityHistory[velocityIndex] = velocity;
 
-            // Velocity difference
-            float deltaVel = velocity - velocityHistory[index1];
-            float deltaTime = (timeBuffer[index2] - timeBuffer[index1]) / 1000.0; // ms to s
-            if (deltaTime > 0) {
-                acceleration += deltaVel / deltaTime;
-            }
+  // Compute acceleration
+  float acceleration = 0.0f;
+  if (bufferFilled || velocityIndex > 0) {
+    int samplesToUse = bufferFilled ? VELOCITY_HISTORY_SIZE : velocityIndex;
+    if (samplesToUse > 1) {
+      for (int i = 0; i < samplesToUse - 1; i++) {
+        int index1 = (velocityIndex + i) % VELOCITY_HISTORY_SIZE;
+        int index2 = (index1 + 1) % VELOCITY_HISTORY_SIZE;
+
+        unsigned long t1 = timeBuffer[index1];
+        unsigned long t2 = timeBuffer[index2];
+        if (t2 >= t1) {
+          float dtSec = (t2 - t1) / 1000.0f;
+          if (dtSec > 0) {
+            float deltaVel = velocityHistory[index2] - velocityHistory[index1];
+            acceleration += (deltaVel / dtSec);
+          }
         }
-        acceleration /= (samplesToUse - 1); // Average acceleration
+      }
+      acceleration /= (samplesToUse - 1);
     }
+  }
 
-    // Update current values
-    currentVelocity = velocity;
-    currentAcceleration = acceleration;
+  // Update global
+  currentVelocity = velocity;
+  currentAcceleration = acceleration;
 
-    // Update buffer index and mark as filled if necessary
-    velocityIndex = (velocityIndex + 1) % VELOCITY_HISTORY_SIZE;
-    if (velocityIndex == 0) {
-        bufferFilled = true;
-    }
+  // Increment ring buffer index
+  velocityIndex = (velocityIndex + 1) % VELOCITY_HISTORY_SIZE;
+  if (velocityIndex == 0) {
+    bufferFilled = true;
+  }
 }
-
-
 
 void getDesiredState(uint16_t position, int &v_desired, int &a_desired) {
     // Normalize position within the velocity program range
@@ -314,8 +329,8 @@ float computePID(int v_desired, float v_measured, int a_desired, float dt) {
     integralError += error * dt;
     float derivativeError = (error - lastError) / dt;
     lastError = error;
-
-    return Kp * error + Ki * integralError + Kd * derivativeError;
+    float pidOut = Kp * error + Ki * integralError + Kd * derivativeError;
+    return pidOut;
 }
 
 float getMotorCurrent() {
@@ -323,7 +338,7 @@ float getMotorCurrent() {
 }
 
 void createNewLogFile() {
-    String fileName = "Test_Log_05Hz_256pts_" + String(logFileCount) + ".txt";
+    String fileName = "333hzTest_Log_05Hz_256pts_" + String(logFileCount) + ".txt";
     logFile = SD.sdfs.open(fileName.c_str(), O_WRITE | O_CREAT | O_TRUNC);// open for write, create file if doens't exist, overwrite if file exists
     if (logFile) {
         logFileCount++; // Increment the file count for the next log file
@@ -402,6 +417,6 @@ void setMotor(int dir, int dc, int pwmPin, int dirPin) {
     } else {
         analogWrite(pwmPin, dc); // Set PWM duty cycle
     }
-    digitalWrite(dirPin, dir == 1 ? LOW : HIGH);
+    digitalWrite(dirPin, dir == 1 ? HIGH : LOW);
 }
 //############ end of set motor function ##############

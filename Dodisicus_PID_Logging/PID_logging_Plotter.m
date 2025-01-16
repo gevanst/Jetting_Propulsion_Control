@@ -1,6 +1,6 @@
 clear, clc
 
-filename = "Test_Log_05Hz_256pts_5.txt";
+filename = "333hzTest_Log_05Hz_256pts_1.txt";
 data = readtable(filename, 'Delimiter', ',', 'ReadVariableNames', true);
 disp('Available variable names in the CSV:');
 disp(data.Properties.VariableNames);
