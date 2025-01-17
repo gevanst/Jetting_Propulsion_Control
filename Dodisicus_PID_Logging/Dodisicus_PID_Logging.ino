@@ -16,7 +16,7 @@
 #include <Metro.h>
 
 #define LOG_BUFFER_SIZE 1024 //entries, 4bytes for time, vel, accel, motorcurrent, 2 bytes for the rest
-#define VELOCITY_HISTORY_SIZE 10 //
+#define VELOCITY_HISTORY_SIZE 50 //
 #define RESOLUTION 12 // 12- bit resoltion of the encoder
 
 String Prog = "prog_05Hz_256pts_OSC.txt"; // velocity program name
@@ -54,7 +54,7 @@ const int mDIR = 2; // direction signal for motor driver IC (high or low to swit
 
 const int MagS = 4; //input pin for magnetic sensor to turn on jetting
 
-const float Kp = 1; // Proportional Control Gain
+const float Kp = 0.1; // Proportional Control Gain
 const float Kd = 0; // Derivative Control Gain
 const float Ki = 0; // Integral Control Gain
 
@@ -79,7 +79,7 @@ uint16_t positionBuffer[VELOCITY_HISTORY_SIZE] = {0};
 unsigned long timeBuffer[VELOCITY_HISTORY_SIZE] = {0};
 float velocityHistory[VELOCITY_HISTORY_SIZE] = {0}; // used to compute acceleration
 
-Metro MainTimer(10);
+Metro MainTimer(2);
 
 // Function Declarations
 void loadVelProgram();

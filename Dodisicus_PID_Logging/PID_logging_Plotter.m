@@ -1,6 +1,6 @@
 clear, clc
 
-filename = "Test_Log_05Hz_256pts_OSC_45.txt";
+filename = "Test_Log_05Hz_256pts_OSC_83.txt";
 data = readtable(filename, 'Delimiter', ',', 'ReadVariableNames', true);
 disp('Available variable names in the CSV:');
 disp(data.Properties.VariableNames);
@@ -10,7 +10,7 @@ figure(1);
 subplot(5,1,1);
 plot(data.Time_ms_/1000,data.Position_count_)
 ylabel('Encoder Position (count)');
-title(':Kp=1.00,Kd=0.00,Ki=0.00');
+title(':Kp=0.10,Kd=0.00,Ki=0.00');
 grid on;
 
 subplot(5,1,2); 
