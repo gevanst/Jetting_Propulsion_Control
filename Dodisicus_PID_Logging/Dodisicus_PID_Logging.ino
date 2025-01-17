@@ -16,11 +16,11 @@
 #include <Metro.h>
 
 #define LOG_BUFFER_SIZE 1024 //entries, 4bytes for time, vel, accel, motorcurrent, 2 bytes for the rest
-#define VELOCITY_HISTORY_SIZE 5 //
+#define VELOCITY_HISTORY_SIZE 10 //
 #define RESOLUTION 12 // 12- bit resoltion of the encoder
 
-String Prog = "prog_05Hz_256pts.txt"; // velocity program name
-int velProgram[256][3]; //may change depending on program loaded
+String Prog = "prog_05Hz_256pts_OSC.txt"; // velocity program name
+int velProgram[256][3]; //
 int velProgLength = 0;
 
 const SPISettings encoderSPISettings(1000000, MSBFIRST, SPI_MODE0); // 1 MHz clock, SPI mode 0 (encoder is capable of up to 2MHz)
@@ -39,7 +39,6 @@ struct LogEntry {
 };
 
 int logFileCount = 1;
-
 LogEntry logBuffer[LOG_BUFFER_SIZE];
 volatile int logBufferWriteIndex = 0;
 volatile int logBufferReadIndex = 0;
@@ -55,16 +54,15 @@ const int mDIR = 2; // direction signal for motor driver IC (high or low to swit
 
 const int MagS = 4; //input pin for magnetic sensor to turn on jetting
 
-const int Kp = 1; // Proportional Control Gain
-const int Kd = 0.1; // Derivative Control Gain
-const int Ki = 0; // Integral Control Gain
+const float Kp = 1; // Proportional Control Gain
+const float Kd = 0; // Derivative Control Gain
+const float Ki = 0; // Integral Control Gain
 
 bool LastSwitchState = HIGH; //mag switch/sensor is normally open (hamlin 59140 1-U-02-A)
 bool SwitchState = LOW;
 int State = 0; //0-idle, 1-running
 const unsigned long debounce = 500; //debounce interval (ignores switches in mag state shorter than 0.5s)
 unsigned long LastSwitchTime = 0;
-
 
 float currentVelocity = 0;
 float currentAcceleration = 0;
@@ -81,7 +79,7 @@ uint16_t positionBuffer[VELOCITY_HISTORY_SIZE] = {0};
 unsigned long timeBuffer[VELOCITY_HISTORY_SIZE] = {0};
 float velocityHistory[VELOCITY_HISTORY_SIZE] = {0}; // used to compute acceleration
 
-Metro MainTimer(3);
+Metro MainTimer(10);
 
 // Function Declarations
 void loadVelProgram();
@@ -98,7 +96,7 @@ void flushLogToSD();
 
 void setup() {
   pinMode(chipSelect1, OUTPUT); // set up chipselct pin mode for encoder comms
-  digitalWrite(chipSelect1, HIGH); // set encoder to inactive state
+  digitalWrite(chipSelect1, HIGH); // set encoder to inactive state to prevent conflicts
 
   pinMode(ledPin, OUTPUT);
   digitalWrite(ledPin, LOW);
@@ -124,7 +122,6 @@ void setup() {
   //***********load velocty program off of SD card to a matrix that will be interpolated with in the main PID loop
   loadVelProgram();
   //***********
-
   initializeLogFileCount();
 
 }
@@ -155,23 +152,20 @@ void loop() {
     unsigned long currentTime = millis();
     float dt = (currentTime - lastUpdateTime) / 1000.0f;
     lastUpdateTime = currentTime;
-
     // 1) Read encoder
     uint16_t position = readEncoder();
-    if (position != 0xFFFF) {
+    if (position != 0xFFFF) {// if good position proceed with control loop and logging
       // 2) Update velocity & accel via partial sums
       updateVelocityAcceleration(position);
-
-      // 3) Desired states
+      // 3) Grab Desired states
       getDesiredState(position, desiredVelocity, desiredAcceleration);
-
       // 4) PID
       controlSignal = computePID(desiredVelocity, currentVelocity, desiredAcceleration, dt);
-
       // 5) Set motor
-      setMotor((controlSignal > 0 ? 1 : -1), abs(controlSignal), mPWM, mDIR);
-
-      // 6) Log data immediately after
+      int pwmVal = (int)round(controlSignal);
+      pwmVal = constrain(pwmVal, -255, 255);
+      setMotor((pwmVal > 0 ? 1 : -1), abs(pwmVal), mPWM, mDIR);
+      // 6) Log data
       float motorCurrent = getMotorCurrent();
       unsigned long now = millis();
       logData(now, position, currentVelocity, currentAcceleration, desiredVelocity, desiredAcceleration, controlSignal, motorCurrent);
@@ -213,13 +207,13 @@ bool verifyChecksumSPI(uint16_t message) {
 }
 
 void initializeLogFileCount() {
-    while (true) {
-        String fileName = "Log_05Hz_256pts_" + String(logFileCount) + ".txt";
-        if (!SD.sdfs.exists(fileName.c_str())) {
-            break;
-        }
-        logFileCount++;
+  while (true) {
+    String fileName = "Test_Log_05Hz_256pts_OSC_" + String(logFileCount) + ".txt";
+    if (!SD.sdfs.exists(fileName.c_str())) {
+        break;
     }
+    logFileCount++;//increment up if log file exists already
+  }
 }
 
 void updateVelocityAcceleration(uint16_t position) {
@@ -319,10 +313,9 @@ void getDesiredState(uint16_t position, int &v_desired, int &a_desired) {
 
     float alpha = (float)(programPos - pos1) / (pos2 - pos1);
 
-    v_desired = vel1 + alpha * (vel2 - vel1);
-    a_desired = acc1 + alpha * (acc2 - acc1);
+    v_desired = (vel1 + alpha * (vel2 - vel1));
+    a_desired = (acc1 + alpha * (acc2 - acc1));
 }
-
 
 float computePID(int v_desired, float v_measured, int a_desired, float dt) {
     float error = v_desired - v_measured;
@@ -338,11 +331,16 @@ float getMotorCurrent() {
 }
 
 void createNewLogFile() {
-    String fileName = "333hzTest_Log_05Hz_256pts_" + String(logFileCount) + ".txt";
+    String fileName = "Test_Log_05Hz_256pts_OSC_" + String(logFileCount) + ".txt";
     logFile = SD.sdfs.open(fileName.c_str(), O_WRITE | O_CREAT | O_TRUNC);// open for write, create file if doens't exist, overwrite if file exists
     if (logFile) {
         logFileCount++; // Increment the file count for the next log file
-        logFile.println("Time (ms), Position (count), Velocity (count/s), Acceleration (count/s2), Desired Vel, Desired Acc, control signal, motorCurrent (raw)");
+        logFile.print("Time (ms), Position (count), Velocity (count/s), Acceleration (count/s2), Desired Vel, Desired Acc, control signal, motorCurrent (raw):Kp=");
+        logFile.print(Kp,2);
+        logFile.print(",Kd=");
+        logFile.print(Kd,2);
+        logFile.print(",Ki=");
+        logFile.println(Ki,2);
     }
 }
 
@@ -372,7 +370,6 @@ void flushLogToSD() {
         logFile.print(entry.controlSignal);
         logFile.print(", ");
         logFile.println(entry.motorCurrent);
-
         logBufferReadIndex = (logBufferReadIndex + 1) % LOG_BUFFER_SIZE;
     }
 }
@@ -407,8 +404,6 @@ void loadVelProgram() {
   }
 }
 
-
-//############# set motor function #####################
 void setMotor(int dir, int dc, int pwmPin, int dirPin) {
     if (dc <= 5) {
         digitalWrite(pwmPin, LOW); // Turn off the motor
@@ -419,4 +414,3 @@ void setMotor(int dir, int dc, int pwmPin, int dirPin) {
     }
     digitalWrite(dirPin, dir == 1 ? HIGH : LOW);
 }
-//############ end of set motor function ##############
